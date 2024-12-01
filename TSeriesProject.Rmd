@@ -1,0 +1,524 @@
+---
+title: "Time Series Final Project:Forecasting NIFTY Stock Market's Volume"
+author: "David Lin"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+## Abstract:
+In this report, I used time series analysis to predict NIFTY stock market's Volume, which measures the number of shares traded in a stock market in futures or options. At the beginning, I found out that yearly stock volume data is too noisy so that I decided to convert into monthly data set. After examining the variance and looking at the plot, it was not stationary, so I used Box-Cox transformation to reduce the variance and make the data stationary for future analysis of identification.
+
+After that, I tried to remove linear trend by differencing at lag1 in order to get more stationary time series data. Then, I plotted ACF and PACF plots to select candidates, and I had identified three model selections, and select two of them to compare, according to AICc. After comparing those two models using different tests (like Q-Q plot, Box-Pierce test, Box-Ljung test, Shapiro-Wilk normality test, and so on), I chose the best fitted model to forecast the future Stock Volume. Finally, the forecast plot shows a reasonable prediction within the range by comparing the true values. Therefore, time series analysis can be a valuable means to predict the future Volume trend in the Stock Market. 
+
+## Introduction
+The top 50 businesses listed on the National Stock Exchange make up the NIFTY, an index of the Indian stock market. It gives information on general market trends and acts as a benchmark for the Indian equity market. To predict the Volume in the stock market is vital since even if a security's price is increasing, low volume can suggest that investors are not confident in it. On the other hand, huge volume accumulation of a specific security may be a sign that traders have trust in the investment over the long term. Therefore, the prediction can see the bias in the stock market which may influence the stock market price. The NIFTY dataset was my first choice since it offers useful information for undertaking a range of analyses, such as financial analysis, stock price forecasts, and operational efficiency evaluation. I select the data from 2010Q1 to 2017Q4. My study's main goal is to examine this dataset and produce predictions for future stock market Volume. The tools I will use in this report are Q-Q plot, Box-Pierce test, Box-Ljung test, Shapiro-Wilk normality test, Box-Cox transformation, ACF and PACF plots, and so on. 
+
+
+
+import necessary libraries
+```{r import libs here}
+library(ggplot2) 
+library(forecast)
+library(xts)
+library(ggplot2)
+library(dplyr)
+library(TTR)
+library(MASS)
+library(tseries)
+```
+
+
+## Install data
+```{r }
+df <- read.csv("RDatasets/NIFTY50_all.csv",header = TRUE)
+```
+
+```{r}
+##convert data types to numeric
+df$Volume <- as.numeric(df$Volume)
+
+# Convert 'datesold' column to proper date format
+df$Date <- as.Date(df$Date)
+
+# show the type of data after converting
+class(df$Date)
+class(df$Volume)
+
+#display summery
+print("---- Summary of the dataset--------")
+summary(df)
+```
+
+## Plot Raw Data
+Lets convert the dataframe above into a time series object used a frequency of 1 since the data is noise.
+
+```{r}
+#Converting data into a ts object with irregular frequency, extract data from Year 2000 to Year 2017.
+ts_df <- ts(df$Volume,start=2000,end=2017, frequency = 1)
+plot(ts_df, xlab = "Date", ylab = "Volume")
+```
+
+
+From above, the data plot is noise, since the interval of the data set is irregular.Thus,we can transform it to a monthly dataset.
+
+Monthly dataset
+```{r}
+df_xts <- xts(df[, c("Date", "Volume")], order.by = df$Date)
+df_monthly <- apply.monthly(df_xts, function(x) x[1, ])
+df_monthly
+```
+
+plot monthly Volume data
+```{r}
+ts_df_vol <- ts(df_monthly$Volume,start=2000,end=2017, frequency = 12)
+plot(ts_df_vol, main = "monthly data", ylab = "volume")
+ts_df_vol <- as.numeric(ts_df_vol)
+```
+
+We can see that the data in two plots is sometimes in a sharply ascend and decline, which indicates that the variances of two data will change over time and may have strong seasonality.
+
+## Data division
+Divide transformed data into train and test data
+```{r}
+n <- length(ts_df_vol)
+x.train <- ts_df_vol[1:(n - 4)] #train data
+x.train <- as.numeric(x.train)
+x.test <- ts_df_vol[(n - 3):n] #test data
+x.test <- as.numeric(x.test)
+plot.ts(x.train, type = "l", main = "Time Series Plot", xlab = "Months", ylab = "NIFTY Volume")
+```
+
+checking if our model is stationary
+```{r}
+hist(x.train, main="Histogram of Volume")
+```
+
+The histogram is right-skewed so it is not a normal distribution. Therefore I have to do transformation to stabilize the variance and differencing at lag1 to remove linear trend.
+
+
+## Transformations
+```{r}
+##Steps to make the ts stationary
+model <- lm(x.train ~ time(x.train))
+fitted_values <- predict(model)
+stationary_ts <- x.train - fitted_values
+
+## lets stabilize the variance by using log
+log.ts_monthly <- log(x.train)
+sqrt.ts_monthly <- sqrt(x.train)
+
+##lets fit lenear regression model
+t = 1:length(x.train)
+fit = lm(x.train ~ t) 
+## applying Box-Cox Transformation
+bc_transform = boxcox(x.train ~ t,plotit = TRUE)
+##performing Power Transformation, Based on the Box-Cox transformation
+lambda = bc_transform$x[which(bc_transform$y == max(bc_transform$y))] 
+bc_transform$x[which(bc_transform$y == max(bc_transform$y))]
+ts_dat_bc = (1/lambda)*(x.train^lambda-1)
+```
+
+Now we plot the original data vs transformed data:
+```{r}
+op= par(mfrow=c(2,2)) 
+plot.ts(x.train, main = "This is original t-series with vwap") 
+plot.ts(log.ts_monthly, main = "Log Transform ") 
+plot.ts(sqrt.ts_monthly, main = "Square Root Transform")
+plot.ts(ts_dat_bc, main = "T series after Box-Cox Transform ")
+```
+
+Then, we can compare the variance to see the aftermath of transformation:
+```{r}
+# show the variance
+var(x.train)
+var(ts_dat_bc)
+```
+
+## Decomposing the results
+Then, we use differencing at lag1 to remove linear trend
+```{r}
+# Difference at lag  = 1 to remove trend component
+differenced_ts1 <- diff(ts_dat_bc,lag=1)
+ts.plot(differenced_ts1,main = "De-trended Time Series",ylab = expression(nabla~Y[t]))
+abline(h = 0,lty = 2)
+```
+
+```{r}
+var(differenced_ts1)
+adf.test(differenced_ts1, alternative = "stationary")
+```
+
+## Model Identification
+```{r}
+acf(differenced_ts1, main="ACF Stationary ts", lag.max = 50)
+pacf(differenced_ts1,main="PACF Stationary ts", lag.max = 50)
+```
+Based on the PACF plot, there is strong peak at h=0 and smaller peaks at h=2,3,5, so may consider p=3,4,5. Based on ACF plot, it shows strong peak at h=0 or 1, so may consider q=1. We choose d = 1,since we difference at lag1. Therefore, we can see that the model may be ARIMA(5,1,1), ARIMA(3,1,1), and ARIMA(4,1,1) as candidates. 
+
+
+```{r}
+#Building ARIMA models
+fit1 <- arima(ts_dat_bc, order = c(5,1,1), method = "ML") #model1
+fit2 <- arima(ts_dat_bc, order = c(3,1,1), method = "ML") #model2
+fit3 <- arima(ts_dat_bc, order = c(4,1,1), method = "ML") #model3
+
+#Checking for AICc
+library(qpcR)
+AICc(fit1)
+AICc(fit2)
+AICc(fit3)
+```
+By building ARIMA model and checking AICc of the models, we select ARIMA(3,1,1) and ARIMA(4,1,1) since they have smaller AICc.
+
+## Estimate Model Parameter
+First, we do estimation for model2
+```{r}
+fit = arima(ts_dat_bc, order = c(3,1,1), method="ML")
+fit
+```
+
+Then, we do estimation for model3
+```{r}
+fit2 = arima(ts_dat_bc, order = c(4,1,1), method="ML")
+fit2
+```
+
+## Model Diagnostics of model2
+Unit Root Test
+```{r}
+#check invertibility of MA part of model model4:
+autoplot(fit, type = c("both", "ar", "ma"))
+```
+
+```{r}
+library(forecast)
+res <- residuals(fit)
+hist(res,density=20, breaks = 30, col="blue", xlab="", prob=TRUE)
+m <- mean(res)
+m
+std <- sqrt(var(res))
+curve(dnorm(x,m,std), add=TRUE)
+plot.ts(res)
+fitt <- lm(res ~ as.numeric(1:length(res)))
+abline(fitt, col="red")
+```
+
+```{r}
+par(mfrow=c(1,2),oma=c(0,0,2,0)) # Plot diagnostics of residuals 
+op <- par(mfrow=c(2,2))
+# acf
+acf(residuals(fit), lag.max=30, main = "Autocorrelation")
+# pacf
+pacf(residuals(fit), lag.max=30, main = "Partial Autocorrelation")
+qqnorm(residuals(fit)) 
+qqline(residuals(fit),col ="red")
+# Add overall title
+title("Model4 Fitted Residuals Diagnostics", outer=TRUE)
+```
+
+
+```{r}
+# Box test
+Box.test(res, lag = 12, type = c("Box-Pierce"), fitdf = 4)
+Box.test(res, lag = 12, type = c("Ljung-Box"), fitdf = 4)
+Box.test(res^2, lag = 12, type = c("Ljung-Box"), fitdf = 4)
+```
+
+
+```{r}
+# Test for normality of residuals
+shapiro.test(residuals(fit))
+```
+
+```{r}
+ar(res, aic = TRUE, order.max = NULL, method = c("yule-walker"))
+```
+Residuals is white noise.
+
+## Model Diagnostics of model3
+Unit Root Test
+```{r}
+#check invertibility of MA part of model model1:
+autoplot(fit3, type = c("both", "ar", "ma"))
+```
+
+```{r}
+library(forecast)
+res3 <- residuals(fit3)
+hist(res3,density=20,breaks=20, col="blue", xlab="", prob=TRUE)
+m <- mean(res3)
+m
+std <- sqrt(var(res3))
+curve(dnorm(x,m,std), add=TRUE)
+plot.ts(res3)
+fitt <- lm(res3 ~ as.numeric(1:length(res3)))
+abline(fitt, col="red")
+```
+
+```{r}
+par(mfrow=c(1,2),oma=c(0,0,2,0)) # Plot diagnostics of residuals 
+op <- par(mfrow=c(2,2))
+# acf
+acf(residuals(fit3), lag.max=30, main = "Autocorrelation")
+# pacf
+pacf(residuals(fit3), lag.max=30, main = "Partial Autocorrelation")
+qqnorm(residuals(fit3)) 
+qqline(residuals(fit3),col ="red")
+# Add overall title
+title("Model 3 Fitted Residuals Diagnostics", outer=TRUE)
+```
+
+```{r}
+# Box test
+Box.test(res3, lag = 12, type = c("Box-Pierce"), fitdf = 5)
+Box.test(res3, lag = 12, type = c("Ljung-Box"), fitdf = 5)
+Box.test(res3^2, lag = 12, type = c("Ljung-Box"), fitdf = 5)
+```
+
+```{r}
+# Test for normality of residuals
+shapiro.test(residuals(fit3))
+```
+
+```{r}
+ar(res3, aic = TRUE, order.max = NULL, method = c("yule-walker"))
+```
+The residuals is white noise.
+
+Diagonostic conclusion:
+Both models pass all tests but Shapiro-Wilk normality test. Based on principle of parsimony, we choose the simplest model with less parameters. Therefore, choose model2 as the Final Model. Also, conclude from residuals, my model is satisfactory.
+
+## Forecast the model
+To produce graph with 4 forecasts on transformed data
+```{r}
+library(forecast)
+library(astsa)
+fitA <- arima(ts_dat_bc, order=c(3,1,1), method="ML")
+# To produce graph with 8 forecasts on transformed data:
+pred.tr <- predict(fitA, n.ahead = 4)
+U.tr= pred.tr$pred + 2*pred.tr$se
+L.tr= pred.tr$pred - 2*pred.tr$se
+ts.plot(ts_dat_bc, xlim=c(1,length(ts_dat_bc)+4), ylim = c(min(ts_dat_bc),max(U.tr)), main = "ARIMA(3,1,1) Forecasting on transformed data")
+lines(U.tr, col="blue", lty="dashed")
+lines(L.tr, col="blue", lty="dashed")
+points((length(ts_dat_bc)+1):(length(ts_dat_bc)+4), pred.tr$pred, col="red")
+```
+Forecasting on the original data
+```{r}
+pred <- predict(fitA, n.ahead = 12)
+origin <- (pred$pred*lambda+1)^(1/lambda)
+U.tr<-pred$pred + 2*pred$se
+L.tr<- pred$pred - 2*pred$se
+U<-(U.tr*lambda+1)^(1/lambda)
+L<- (L.tr*lambda+1)^(1/lambda)
+ts.plot(x.train, xlim=c(1,length(x.train)+12), ylim = c(min(ts_df_vol),max(U)), main = "ARIMA(3,1,1) Forecasting on the original data")
+lines(origin, col = 'red')
+lines(U, col="blue", lty="dashed")
+lines(L, col="blue", lty="dashed")
+```
+
+```{r}
+par(mfrow=c(1, 1))
+pred.try <- sarima.for(x.train, n.ahead=4, plot.all=F, p=3, d=1, q=1, D=0,P=0,Q=0)
+lines((n - 3):n, pred.try$pred, col="red")
+lines((n - 3):n, x.test, col="blue")
+points((n - 3):n, x.test, col="blue")
+legend("topright", pch=1, col=c("red", "blue"),  legend=c("Forecasted values", "True Values"))
+```
+
+
+## Conclusion
+In conclusion, the model we used to predict the stock market's Volume has passed all tests except Shapiro-Wilk normality test. Also, the forecasting plot shows that the predicted values aligned with the tests values within the confidence interval. Therefore, within a confidence interval, the forecasting model successfully predicts the trend of stock market's volume in 4 months. However, our forecasting model still needs more accuracy as we can see the strainght-line prediction on plots.
+In addition, the fitted model in algebraic form is:
+$$X_t = 0.0576X_{t-1}+0.0978X_{t-2} -0.0234X_{t-3} -0.8016Z_{t-1}+W_n$$
+Finally, I am writing this acknowledgement to acknowledge the receipt of support and guaidance in my final project. I would like to give my gratitude to our brilliant Professor Feldman and TA, AUNG T. Their feedback are instructive, and I appreciate their promptness in dealing with data selection and model identifications. It will allow me to progress efficiently and effectively.
+
+## Reference
+https://a-little-book-of-r-for-time-series.readthedocs.io/en/latest/src/timeseries.html
+https://www.kaggle.com/code/paytonfisher/s-p-500-analysis-using-r
+https://gauchospace.ucsb.edu/courses/pluginfile.php/11850413/mod_resource/content/1/Lecture%2015-AirPass%20slides.pdf
+labs from https://gauchospace.ucsb.edu/courses/course/view.php?id=53366
+
+
+## Appendix
+```{r appendix, ref.label=knitr::all_labels(), echo=TRUE, eval=FALSE}
+library(ggplot2) 
+library(forecast)
+library(xts)
+library(ggplot2)
+library(dplyr)
+library(TTR)
+library(MASS)
+library(tseries)
+df <- read.csv("RDatasets/NIFTY50_all.csv",header = TRUE)
+##convert data types to numeric
+df$Volume <- as.numeric(df$Volume)
+
+# Convert 'datesold' column to proper date format
+df$Date <- as.Date(df$Date)
+
+# show the type of data after converting
+class(df$Date)
+class(df$Volume)
+
+#display summery
+print("---- Summary of the dataset--------")
+summary(df)
+#Converting data into a ts object with irregular frequency, extract data from Year 2000 to Year 2017.
+ts_df <- ts(df$Volume,start=2000,end=2017, frequency = 1)
+plot(ts_df, xlab = "Date", ylab = "Volume")
+# Create an xts object with the data
+df_xts <- xts(df[, c("Date", "Volume")], order.by = df$Date)
+# Aggregate to monthly intervals using the first observation in each month
+df_monthly <- apply.monthly(df_xts, function(x) x[1, ])
+ts_df_vol <- ts(df_monthly$Volume,start=2000,end=2017, frequency = 12)
+plot(ts_df_vol, main = "monthly data", ylab = "volume")
+n <- length(ts_df_vol)
+x.train <- ts_df_vol[1:(n - 4)] #train data
+x.train <- as.numeric(x.train)
+x.test <- ts_df_vol[(n - 3):n] #test data
+x.test <- as.numeric(x.test)
+plot.ts(x.train, type = "l", main = "Differenced Time Series Plot", xlab = "Months", ylab = "NIFTY Volume")
+hist(x.train, main="Histogram of Volume")
+acf(x.train, main = "ACF of x.train")
+##Steps to make the ts stationary
+model <- lm(x.train ~ time(x.train))
+fitted_values <- predict(model)
+stationary_ts <- x.train - fitted_values
+
+## lets stabilize the variance by using log
+log.ts_monthly <- log(x.train)
+sqrt.ts_monthly <- sqrt(x.train)
+
+##lets fit lenear regression model
+t = 1:length(x.train)
+fit = lm(x.train ~ t) 
+## applying Box-Cox Transformation
+bc_transform = boxcox(x.train ~ t,plotit = TRUE)
+##performing Power Transformation, Based on the Box-Cox transformation
+lambda = bc_transform$x[which(bc_transform$y == max(bc_transform$y))] 
+bc_transform$x[which(bc_transform$y == max(bc_transform$y))]
+ts_dat_bc = (1/lambda)*(x.train^lambda-1)
+op= par(mfrow=c(2,2)) 
+plot.ts(x.train, main = "This is original t-series with vwap") 
+plot.ts(log.ts_monthly, main = "Log Transform ") 
+plot.ts(sqrt.ts_monthly, main = "Square Root Transform")
+plot.ts(ts_dat_bc, main = "T series after Box-Cox Transform ")
+# show the variance
+var(x.train)
+var(ts_dat_bc)
+# Difference at lag  = 1 to remove trend component
+differenced_ts1 <- diff(ts_dat_bc,lag=1)
+ts.plot(differenced_ts1,main = "De-trended Time Series",ylab = expression(nabla~Y[t]))
+abline(h = 0,lty = 2)
+var(differenced_ts1)
+adf.test(differenced_ts1, alternative = "stationary")
+acf(differenced_ts1, main="ACF Stationary ts", lag.max = 50)
+pacf(differenced_ts1,main="PACF Stationary ts", lag.max = 50)
+#Building ARIMA models
+fit1 <- arima(ts_dat_bc, order = c(5,1,1), method = "ML") #model1
+fit2 <- arima(ts_dat_bc, order = c(3,1,1), method = "ML") #model2
+fit3 <- arima(ts_dat_bc, order = c(4,1,1), method = "ML") #model3
+
+#Checking for AICc
+library(qpcR)
+AICc(fit1)
+AICc(fit2)
+AICc(fit3)
+fit = arima(ts_dat_bc, order = c(3,1,1), method="ML")
+fit
+fit2 = arima(ts_dat_bc, order = c(4,1,1), method="ML")
+fit2
+autoplot(fit, type = c("both", "ar", "ma"))
+library(forecast)
+res <- residuals(fit)
+hist(res,density=20, breaks = 30, col="blue", xlab="", prob=TRUE)
+m <- mean(res)
+m
+std <- sqrt(var(res))
+curve(dnorm(x,m,std), add=TRUE)
+plot.ts(res)
+fitt <- lm(res ~ as.numeric(1:length(res)))
+abline(fitt, col="red")
+par(mfrow=c(1,2),oma=c(0,0,2,0)) # Plot diagnostics of residuals 
+op <- par(mfrow=c(2,2))
+# acf
+acf(residuals(fit), lag.max=30, main = "Autocorrelation")
+# pacf
+pacf(residuals(fit), lag.max=30, main = "Partial Autocorrelation")
+qqnorm(residuals(fit)) 
+qqline(residuals(fit),col ="red")
+# Add overall title
+title("Model4 Fitted Residuals Diagnostics", outer=TRUE)
+Box.test(res, lag = 12, type = c("Box-Pierce"), fitdf = 4)
+Box.test(res, lag = 12, type = c("Ljung-Box"), fitdf = 4)
+Box.test(res^2, lag = 12, type = c("Ljung-Box"), fitdf = 4)
+shapiro.test(residuals(fit))
+ar(res, aic = TRUE, order.max = NULL, method = c("yule-walker"))
+autoplot(fit3, type = c("both", "ar", "ma"))
+library(forecast)
+res3 <- residuals(fit3)
+hist(res3,density=20,breaks=20, col="blue", xlab="", prob=TRUE)
+m <- mean(res3)
+m
+std <- sqrt(var(res3))
+curve(dnorm(x,m,std), add=TRUE)
+plot.ts(res3)
+fitt <- lm(res3 ~ as.numeric(1:length(res3)))
+abline(fitt, col="red")
+par(mfrow=c(1,2),oma=c(0,0,2,0)) # Plot diagnostics of residuals 
+op <- par(mfrow=c(2,2))
+# acf
+acf(residuals(fit3), lag.max=30, main = "Autocorrelation")
+# pacf
+pacf(residuals(fit3), lag.max=30, main = "Partial Autocorrelation")
+qqnorm(residuals(fit3)) 
+qqline(residuals(fit3),col ="red")
+# Add overall title
+title("Model 3 Fitted Residuals Diagnostics", outer=TRUE)
+Box.test(res3, lag = 12, type = c("Box-Pierce"), fitdf = 5)
+Box.test(res3, lag = 12, type = c("Ljung-Box"), fitdf = 5)
+Box.test(res3^2, lag = 12, type = c("Ljung-Box"), fitdf = 5)
+shapiro.test(residuals(fit3))
+ar(res3, aic = TRUE, order.max = NULL, method = c("yule-walker"))
+library(forecast)
+library(astsa)
+fitA <- arima(ts_dat_bc, order=c(3,1,1), method="ML")
+# To produce graph with 8 forecasts on transformed data:
+pred.tr <- predict(fitA, n.ahead = 4)
+U.tr= pred.tr$pred + 2*pred.tr$se
+L.tr= pred.tr$pred - 2*pred.tr$se
+ts.plot(ts_dat_bc, xlim=c(1,length(ts_dat_bc)+4), ylim = c(min(ts_dat_bc),max(U.tr)), main = "ARIMA(3,1,1) Forecasting on transformed data")
+lines(U.tr, col="blue", lty="dashed")
+lines(L.tr, col="blue", lty="dashed")
+points((length(ts_dat_bc)+1):(length(ts_dat_bc)+4), pred.tr$pred, col="red")
+pred <- predict(fitA, n.ahead = 12)
+origin <- (pred.tr$pred*lambda+1)^(1/lambda)
+pred.orig <- (pred$pred*lambda+1)^(1/lambda)
+U.tr<-pred$pred + 2*pred$se
+L.tr<- pred$pred - 2*pred$se
+U<-(U.tr*lambda+1)^(1/lambda)
+L<- (L.tr*lambda+1)^(1/lambda)
+ts.plot(x.train, xlim=c(1,length(x.train)+12), ylim = c(min(ts_df_vol),max(U)), main = "ARIMA(3,1,1) Forecasting on the original data")
+lines(pred.orig, col = 'red')
+lines(U, col="blue", lty="dashed")
+lines(L, col="blue", lty="dashed")
+par(mfrow=c(1, 1))
+pred.try <- sarima.for(x.train, n.ahead=4, plot.all=F, p=3, d=1, q=1, D=0,P=0,Q=0)
+lines((n - 3):n, pred.try$pred, col="red")
+lines((n - 3):n, x.test, col="blue")
+points((n - 3):n, x.test, col="blue")
+legend("topright", pch=1, col=c("red", "blue"),  legend=c("Forecasted values", "True Values"))
+```
+
+
+
+
+
+
